@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: finledger-postgres
+    environment:
+      POSTGRES_DB: finledger
+      POSTGRES_USER: finledger
+      POSTGRES_PASSWORD: finledger
+    ports:
+      - "5432:5432"
+    volumes:
+      - finledger-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finledger -d finledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  finledger-postgres-data:
