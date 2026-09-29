@@ -2,7 +2,7 @@ package com.finledger.transfer;
 
 import com.finledger.account.Account;
 import com.finledger.account.AccountRepository;
-import jakarta.transaction.Transactional;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -34,14 +34,12 @@ public class TransferService {
         transferRepository.save(transfer);
 
         from.withdraw(amount);
-        accountRepository.save(from);
 
         to.deposit(amount);
-        accountRepository.save(to);
 
         transfer.success();
 
-        return transferRepository.save(transfer);
+        return transfer;
     }
 
     @Transactional
