@@ -2,9 +2,9 @@ spring:
   application:
     name: finledger
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/finledger}
-    username: ${DB_USERNAME:finledger}
-    password: ${DB_PASSWORD:finledger}
+    url: jdbc:postgresql://127.0.0.1:5433/finledger
+    username: finledger
+    password: finledger
   jpa:
     open-in-view: false
     hibernate:

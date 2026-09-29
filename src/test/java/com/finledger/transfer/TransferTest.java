@@ -1,64 +1,56 @@
 package com.finledger.transfer;
 
 import com.finledger.account.Account;
-import com.finledger.common.error.BusinessException;
-import com.finledger.common.error.ErrorCode;
+import com.finledger.account.AccountRepository;
 import com.finledger.member.Member;
+import com.finledger.member.MemberRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class TransferTest {
+@SpringBootTest
+public class TransferTest {
+    @Autowired
+    MemberRepository memberRepository;
 
-    private final Member member = new Member("홍길동");
+    @Autowired
+    AccountRepository accountRepository;
+
+    @Autowired
+    TransferRepository transferRepository;
+
+    @Autowired
+    TransferService transferService;
 
     @Test
-    void changesFromPendingToSuccess() {
-        Account fromAccount = new Account(member, "100-001", 100_000L);
-        Account toAccount = new Account(member, "100-002", 0L);
-        Transfer transfer = new Transfer(fromAccount, toAccount, 30_000L);
+    @DisplayName("정상적으로 계좌이체한다.")
+    void transferTest(){
+        //given
+        Member member = memberRepository.save(new Member("sj"));
+        Account from = accountRepository.save(new Account(member));
+        Account to = accountRepository.save(new Account(member));
 
-        assertThat(transfer.getStatus()).isEqualTo(TransferStatus.PENDING);
-        assertThat(transfer.getCompletedAt()).isNull();
+        from.deposit(100_000L);
+        accountRepository.save(from);
 
-        transfer.complete();
+        long beforeTotal = from.getBalance() + to.getBalance();
 
+        //when
+        Transfer transfer = transferService.transfer(from.getId(), to.getId(), 30_000L);
+
+        //then
+        Account resultFrom = accountRepository.findById(from.getId()).orElseThrow();
+        Account resultTo = accountRepository.findById(to.getId()).orElseThrow();
+
+        assertThat(resultFrom.getBalance()).isEqualTo(70_000L);
+        assertThat(resultTo.getBalance()).isEqualTo(30_000L);
         assertThat(transfer.getStatus()).isEqualTo(TransferStatus.SUCCESS);
-        assertThat(transfer.getCompletedAt()).isNotNull();
-    }
 
-    @Test
-    void rejectsNonPositiveAmount() {
-        Account fromAccount = new Account(member, "100-001", 100_000L);
-        Account toAccount = new Account(member, "100-002", 0L);
+        long afterTotal = resultFrom.getBalance() + resultTo.getBalance();
 
-        assertThatThrownBy(() -> new Transfer(fromAccount, toAccount, 0L))
-                .isInstanceOf(BusinessException.class)
-                .extracting(exception -> ((BusinessException) exception).getErrorCode())
-                .isEqualTo(ErrorCode.INVALID_AMOUNT);
-    }
-
-    @Test
-    void rejectsTransferToSameAccount() {
-        Account account = new Account(member, "100-001", 100_000L);
-
-        assertThatThrownBy(() -> new Transfer(account, account, 10_000L))
-                .isInstanceOf(BusinessException.class)
-                .extracting(exception -> ((BusinessException) exception).getErrorCode())
-                .isEqualTo(ErrorCode.SAME_ACCOUNT_TRANSFER);
-    }
-
-    @Test
-    void cannotCompleteTwice() {
-        Account fromAccount = new Account(member, "100-001", 100_000L);
-        Account toAccount = new Account(member, "100-002", 0L);
-        Transfer transfer = new Transfer(fromAccount, toAccount, 30_000L);
-        transfer.complete();
-
-        assertThatThrownBy(transfer::complete)
-                .isInstanceOf(BusinessException.class)
-                .extracting(exception -> ((BusinessException) exception).getErrorCode())
-                .isEqualTo(ErrorCode.INVALID_TRANSFER_STATUS);
+        assertThat(afterTotal).isEqualTo(beforeTotal);
     }
 }
