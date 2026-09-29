@@ -2,6 +2,7 @@ package com.finledger.transfer;
 
 import com.finledger.account.Account;
 import com.finledger.account.AccountRepository;
+import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -14,6 +15,7 @@ public class TransferService {
         this.transferRepository = transferRepository;
     }
 
+    @Transactional
     public Transfer transfer(Long fromAccountId, Long toAccountId, long amount){
         if(amount <= 0){
             throw new IllegalArgumentException("송금 금액은 1원 이상이어야 합니다.");
@@ -42,6 +44,7 @@ public class TransferService {
         return transferRepository.save(transfer);
     }
 
+    @Transactional
     public Transfer transferWithFailure(Long fromAccountId, Long toAccountId, long amount){
         Account from = accountRepository.findById(fromAccountId).orElseThrow(()->new IllegalArgumentException("출금 계좌가 없습니다."));
         Account to = accountRepository.findById(toAccountId).orElseThrow(()->new IllegalArgumentException("입금 계좌가 없습니다."));

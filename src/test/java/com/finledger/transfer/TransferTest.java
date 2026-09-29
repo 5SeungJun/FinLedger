@@ -86,4 +86,37 @@ public class TransferTest {
         assertThat(afterTotal).isEqualTo(70_000L);
         assertThat(afterTotal).isNotEqualTo(beforeTotal);
     }
+
+    @Test
+    @DisplayName("송금 중 장애 발생 시 전체 작업을 롤백한다")
+    void transferFailureRollback(){
+        //given
+        Member member = memberRepository.save(new Member("sj"));
+        Account from = accountRepository.save(new Account(member));
+        Account to = accountRepository.save(new Account(member));
+
+        from.deposit(100_000L);
+        accountRepository.save(from);
+
+        long beforeTotal = from.getBalance() + to.getBalance();
+        long transferCountBefore = transferRepository.count();
+
+        //when
+        assertThatThrownBy(()->
+                transferService.transferWithFailure(from.getId(), to.getId(), 30_000L)
+                ).isInstanceOf(RuntimeException.class);
+
+        //then
+        Account resultFrom = accountRepository.findById(from.getId()).orElseThrow();
+        Account resultTo = accountRepository.findById(to.getId()).orElseThrow();
+
+        assertThat(resultFrom.getBalance()).isEqualTo(100_000L);
+        assertThat(resultTo.getBalance()).isZero();
+
+        long afterTotal = resultFrom.getBalance() + resultTo.getBalance();
+
+        assertThat(afterTotal).isEqualTo(beforeTotal);
+
+        assertThat(transferRepository.count()).isEqualTo(transferCountBefore);
+    }
 }
