@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest
 public class TransferTest {
@@ -52,5 +53,37 @@ public class TransferTest {
         long afterTotal = resultFrom.getBalance() + resultTo.getBalance();
 
         assertThat(afterTotal).isEqualTo(beforeTotal);
+    }
+
+    @Test
+    @DisplayName("트랜잭션이 없으면 송금 중 장애 발생 시 출금만 반영된다.")
+    void transferFailureTest(){
+        //given
+        Member member =memberRepository.save(new Member("sj"));
+
+        Account from = accountRepository.save(new Account(member));
+        Account to = accountRepository.save(new Account(member));
+
+        from.deposit(100_000L);
+        accountRepository.save(from);
+
+        long beforeTotal = from.getBalance() + to.getBalance();
+
+        //when
+        assertThatThrownBy(() ->
+                transferService.transferWithFailure(from.getId(), to.getId(), 30_000L))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("송금 중 강제 장애");
+
+        //then
+        Account resultFrom = accountRepository.findById(from.getId()).orElseThrow();
+        Account resultTo = accountRepository.findById((to.getId())).orElseThrow();
+
+        long afterTotal = resultFrom.getBalance() + resultTo.getBalance();
+
+        assertThat(resultFrom.getBalance()).isEqualTo(70_000L);
+        assertThat(resultTo.getBalance()).isZero();
+        assertThat(afterTotal).isEqualTo(70_000L);
+        assertThat(afterTotal).isNotEqualTo(beforeTotal);
     }
 }

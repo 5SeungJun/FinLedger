@@ -41,4 +41,22 @@ public class TransferService {
 
         return transferRepository.save(transfer);
     }
+
+    public Transfer transferWithFailure(Long fromAccountId, Long toAccountId, long amount){
+        Account from = accountRepository.findById(fromAccountId).orElseThrow(()->new IllegalArgumentException("출금 계좌가 없습니다."));
+        Account to = accountRepository.findById(toAccountId).orElseThrow(()->new IllegalArgumentException("입금 계좌가 없습니다."));
+
+        Transfer transfer = new Transfer(from, to, amount);
+        transferRepository.save(transfer);
+
+        from.withdraw(amount);
+        accountRepository.save(from);
+
+        //출금이 DB에 저장된 직후 장애 발생
+        throw new RuntimeException("송금 중 강제 장애");
+
+        //실행되지 않음
+        //to.deposit(amount);
+        //accountRepository.save(to);
+    }
 }
