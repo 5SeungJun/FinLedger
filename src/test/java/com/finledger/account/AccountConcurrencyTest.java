@@ -70,7 +70,54 @@ public class AccountConcurrencyTest {
         System.out.println("성공한 출금 요청 = " + successCount.get());
         System.out.println("최종 잔액 = " + result.getBalance());
 
-        assertThat(successCount.get()).isEqualTo(2);
+        assertThat(successCount.get()).isEqualTo(1);
+        assertThat(result.getBalance()).isEqualTo(2_000L);
+    }
+
+    @Test
+    @DisplayName("동시에 출금해도 비관적 락으로 한 번만 성공한다")
+    void PessimistickLockTest() throws Exception {
+        // given
+        Member member = memberRepository.save(new Member("sj"));
+        Account account = accountRepository.save(new Account(member));
+
+        account.deposit(10_000L);
+        accountRepository.save(account);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        CountDownLatch startLatch = new CountDownLatch(1);
+
+        AtomicInteger successCount = new AtomicInteger();
+
+        // when
+        Runnable task = () -> {
+            try {
+                startLatch.await();
+
+                accountService.withdrawWithLock(account.getId(), 8_000L);
+
+                successCount.incrementAndGet();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        };
+
+        executor.submit(task);
+        executor.submit(task);
+
+        startLatch.countDown();
+
+        executor.shutdown();
+        executor.awaitTermination(5, TimeUnit.SECONDS);
+
+        // then
+        Account result = accountRepository.findById(account.getId()).orElseThrow();
+
+        System.out.println("성공한 출금 요청 = " + successCount.get());
+        System.out.println("최종 잔액 = " + result.getBalance());
+
+        assertThat(successCount.get()).isEqualTo(1);
         assertThat(result.getBalance()).isEqualTo(2_000L);
     }
 }

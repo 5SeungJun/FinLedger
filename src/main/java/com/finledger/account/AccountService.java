@@ -32,4 +32,11 @@ public class AccountService {
 
         account.withdraw(amount);
     }
+
+    @Transactional
+    public void withdrawWithLock(Long accountId, long amount){
+        Account account = accountRepository.findByIdForUpdate(accountId).orElseThrow(()->new IllegalArgumentException("계좌가 없습니다."));
+
+        account.withdraw(amount);
+    }
 }
