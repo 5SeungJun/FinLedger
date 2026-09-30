@@ -7,6 +7,7 @@ import jakarta.persistence.*;
 @Table(name = "accounts")
 public class Account {
 
+    //커밋 테스트
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
