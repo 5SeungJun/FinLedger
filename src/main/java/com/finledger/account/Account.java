@@ -19,6 +19,10 @@ public class Account {
     @Column(nullable = false)
     private long balance;
 
+    @Version
+    @Column(nullable = false)
+    private long version;
+
     protected Account(){}
 
     public Account(Member member){
