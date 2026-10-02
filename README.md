@@ -6,7 +6,7 @@
 
 ---
 
-## Tech Stack
+## 기술 스택
 
 - Java 21
 - Spring Boot
@@ -32,18 +32,20 @@
 
 ## 현재 구현
 
-- Member
-- Account
+- 회원
+- 계좌
 - 입금 / 출금
 - 내부 계좌이체
-- Transfer 상태 관리
-- Transaction Rollback
+- 송금 상태 관리
+- 트랜잭션 롤백
 - 동시 출금 테스트
-- Pessimistic Lock
+- 비관적 락
+- 낙관적 락 (`@Version`)
+- 낙관적 락 충돌 시 재시도
 
 ---
 
-## 핵심 Invariant
+## 핵심 불변식
 
 ```text
 1. account.balance >= 0
@@ -59,7 +61,7 @@
 
 ---
 
-# 1. Transaction Atomicity
+# 1. 트랜잭션 원자성
 
 ## 문제 상황
 
@@ -86,7 +88,7 @@ B = 0원
 
 ## 원인 분석
 
-송금 과정의 여러 DB 작업이 하나의 Transaction으로 묶여 있지 않아, 이미 완료된 DB 변경은 이후 예외가 발생해도 자동으로 취소되지 않았다.
+송금 과정의 여러 DB 작업이 하나의 트랜잭션으로 묶여 있지 않아, 이미 완료된 DB 변경은 이후 예외가 발생해도 자동으로 취소되지 않았다.
 
 ## 해결 방법
 
@@ -119,16 +121,16 @@ B = 0원
 
 ## 학습 내용
 
-- Transaction
-- ACID Atomicity
-- Commit / Rollback
+- 트랜잭션
+- ACID 원자성
+- 커밋 / 롤백
 - `@Transactional`
-- Persistence Context
-- Dirty Checking
+- 영속성 컨텍스트
+- 변경 감지
 
 ---
 
-# 2. Concurrent Withdrawal
+# 2. 동시 출금
 
 ## 문제 상황
 
@@ -139,26 +141,28 @@ B = 0원
 동시 요청: 8,000원 출금 × 2
 ```
 
-Lock 적용 전:
+락 적용 전:
 
 ```text
 성공 요청: 2
 최종 잔액: 2,000원
 ```
 
-실제로는 16,000원의 출금이 성공했지만 잔액에는 한 번의 출금만 반영되는 `Lost Update`가 발생했다.
+실제로는 16,000원의 출금이 성공했지만 잔액에는 한 번의 출금만 반영되는 갱신 손실(Lost Update)이 발생했다.
+
+> 이후 `Account`에 `@Version`을 도입(3장)하면서 현재 코드에서는 같은 시나리오도 낙관적 락으로 차단된다. 위 결과는 `@Version` 도입 전 커밋(`71f68e4`) 기준이며, 최신 코드로는 그대로 재현되지 않는다.
 
 ## 원인 분석
 
 두 트랜잭션이 동시에 동일한 잔액을 조회했다.
 
 ```text
-Transaction A
+트랜잭션 A
 10,000 조회
 → 8,000 출금
 → 2,000 저장
 
-Transaction B
+트랜잭션 B
 10,000 조회
 → 8,000 출금
 → 2,000 저장
@@ -172,15 +176,15 @@ Transaction B
 
 | 방식 | 장점 | 단점 |
 |---|---|---|
-| 비관적 락 | 충돌을 사전에 차단하고 동작이 명확함 | 대기시간 증가, Deadlock 가능 |
-| 낙관적 락 | Lock 점유가 없어 충돌이 적을 때 유리 | 충돌 시 예외 및 재시도 필요 |
-| Atomic Update | 단순 조건부 갱신에 효율적 | 복잡한 송금 로직 확장에 제약 |
+| 비관적 락 | 충돌을 사전에 차단하고 동작이 명확함 | 대기시간 증가, 교착 상태 가능 |
+| 낙관적 락 | 락 점유가 없어 충돌이 적을 때 유리 | 충돌 시 예외 및 재시도 필요 |
+| 원자적 갱신 | 단순 조건부 갱신에 효율적 | 복잡한 송금 로직 확장에 제약 |
 
 ## 선택과 근거
 
 현재 단계에서는 `PESSIMISTIC_WRITE`를 선택했다.
 
-계좌 잔액은 정합성이 우선되는 데이터이며, 동일 계좌에 대한 동시 변경을 DB Row Lock으로 직렬화해 동작을 명확하게 확인하기 위해 비관적 락을 먼저 적용했다.
+계좌 잔액은 정합성이 우선되는 데이터이며, 동일 계좌에 대한 동시 변경을 DB 행 락으로 직렬화해 동작을 명확하게 확인하기 위해 비관적 락을 먼저 적용했다.
 
 ```java
 @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -207,30 +211,96 @@ Optional<Account> findByIdForUpdate(Long id);
 
 실제 성공한 출금 횟수와 최종 잔액이 일치함을 확인했다.
 
-## 한계
+## 학습 내용
 
-현재 검증은 단일 PostgreSQL 환경 기준이다.
+- 경쟁 상태(Race Condition)
+- 갱신 손실(Lost Update)
+- 비관적 락
+- `SELECT FOR UPDATE`
+- 트랜잭션 격리 수준
 
-추가로 검증해야 할 항목:
+---
 
-- Lock 경합 증가 시 처리량 저하
-- Deadlock 가능성
-- Optimistic Lock과의 성능 및 충돌 방식 비교
-- Scale-out 환경에서의 동시성 제어
+# 3. 낙관적 락
+
+## 문제 상황
+
+비관적 락은 조회 시점부터 행을 잠그기 때문에, 충돌이 드문 환경에서도 모든 요청이 락 대기 가능성을 안고 간다.
+
+락을 선점하지 않고 진행하되, 저장 시점에 충돌만 감지하는 방식을 적용해 비관적 락과 동작 차이를 비교했다.
+
+## 해결 방법
+
+`Account`에 `@Version` 필드를 추가했다.
+
+```java
+@Version
+@Column(nullable = false)
+private long version;
+```
+
+수정 시 `update ... where id = ? and version = ?` 조건으로 저장되며, 그 사이 다른 트랜잭션이 먼저 커밋했다면 갱신된 행이 0건이 되어 `OptimisticLockingFailureException`이 발생한다.
+
+## 충돌 검증
+
+`CyclicBarrier`로 두 트랜잭션이 같은 `version`을 읽을 때까지 기다리게 한 뒤 동시에 출금했다.
+
+```text
+초기 잔액: 10,000원
+동시 요청: 8,000원 출금 × 2
+
+성공: 1건
+충돌: 1건 (OptimisticLockingFailureException)
+최종 잔액: 2,000원
+```
+
+비관적 락은 두 번째 요청이 **대기 후 잔액 부족으로 실패**했지만, 낙관적 락은 두 번째 요청이 **저장 시점에 충돌로 실패**한다.
+
+## 재시도
+
+충돌은 예외로 끝나므로 호출하는 쪽에서 재시도해야 한다. `OptimisticWithdrawRetryService`에서 최대 3회 재시도한다.
+
+- 재시도 반복문은 `@Transactional` 메서드 **밖**, 별도 빈에 둔다. 재시도마다 새 트랜잭션이 열리고 최신 잔액을 다시 조회한다.
+- 재시도 대상은 `OptimisticLockingFailureException`뿐이다. 잔액 부족 같은 비즈니스 예외는 재시도하지 않고 그대로 던진다.
+- 외부 트랜잭션 안에서 호출하면 롤백 전용이 된 트랜잭션에서 재시도가 의미 없으므로, 외부 트랜잭션 없이 호출한다.
+
+```text
+[3,000원 출금 × 3 동시 요청, 초기 잔액 10,000원]
+
+충돌 발생 시 재시도
+→ 3건 모두 성공
+→ 최종 잔액: 1,000원
+
+[8,000원 출금 × 2 동시 요청, 초기 잔액 10,000원]
+
+성공: 1건
+잔액 부족 실패: 1건 (재시도하지 않음)
+최종 잔액: 2,000원
+```
+
+## 비관적 락 vs 낙관적 락
+
+| | 비관적 락 | 낙관적 락 |
+|---|---|---|
+| 구현 | `findByIdForUpdate` (`SELECT FOR UPDATE`) | `@Version` + 충돌 시 재시도 |
+| 충돌 시 | 대기 후 최신 값으로 진행 | 한쪽이 예외로 실패, 재시도 필요 |
+| 실패 방식 | 비즈니스 규칙에 의한 실패 (잔액 부족) | 충돌 예외 → 재시도 후 비즈니스 규칙 적용 |
+| 유리한 상황 | 충돌이 잦고 정합성이 최우선인 경우 | 충돌이 드물고 읽기가 많은 경우 |
+| 주의점 | 락 대기, 교착 상태 | 재시도 횟수 초과, 충돌이 잦으면 헛수고 증가 |
 
 ## 학습 내용
 
-- Race Condition
-- Lost Update
-- Pessimistic Lock
-- `SELECT FOR UPDATE`
-- Transaction Isolation
+- 낙관적 락
+- `@Version`
+- 충돌 감지와 재시도
+- 재시도 로직을 트랜잭션 밖에 두는 이유
+- 비관적 락과의 동작 차이
 
 ---
 
 ## 테스트 범위
 
-### Account
+### 계좌
 
 - 정상 입금
 - 정상 출금
@@ -238,15 +308,18 @@ Optional<Account> findByIdForUpdate(Long id);
 - 0원 이하 금액 방지
 - 동시 출금 문제 재현
 - 비관적 락 적용 후 정합성 검증
+- 낙관적 락 충돌 감지
+- 낙관적 락 충돌 시 재시도로 동시 출금 처리
+- 잔액 부족은 재시도하지 않고 실패 처리
 
-### Transfer
+### 송금
 
 - 정상 내부 송금
 - 잔액 부족 송금 실패
 - 송금 전후 총 자산 보존
-- Transfer 상태 검증
+- 송금 상태 검증
 - 송금 중 강제 장애
-- 장애 발생 시 전체 Rollback
+- 장애 발생 시 전체 롤백
 
 ---
 
@@ -254,35 +327,39 @@ Optional<Account> findByIdForUpdate(Long id);
 
 ```text
 ✅ 프로젝트 초기 환경 구성
-✅ Member / Account
+✅ 회원 / 계좌
 ✅ 입금 / 출금
 ✅ 내부 계좌이체
 ✅ 송금 불변식 검증
 
-✅ Transaction Atomicity
+✅ 트랜잭션 원자성
 ✅ 송금 중 부분 반영 문제 재현
 ✅ @Transactional 적용
-✅ Rollback 검증
+✅ 롤백 검증
 
 ✅ 동시 출금 문제 재현
-✅ Race Condition / Lost Update
-✅ Pessimistic Lock 적용
+✅ 경쟁 상태 / 갱신 손실
+✅ 비관적 락 적용
 ✅ 동시 출금 정합성 검증
 
+✅ 낙관적 락 (@Version)
+✅ 충돌 감지 검증
+✅ 충돌 시 재시도
+✅ 비관적 락 vs 낙관적 락 동작 비교
+
 ▶ 다음
-Optimistic Lock
-Pessimistic vs Optimistic 비교
-Deadlock 재현 및 해결
+교착 상태 재현 및 해결
+락 성능 비교
 
 이후
-Ledger
-Idempotency
+원장
+멱등성
 외부 시스템 장애
-Connection Pool
+커넥션 풀
 Kafka
-Transactional Outbox
-Settlement Batch
-DB Performance
-Scale-out
-Observability
+트랜잭셔널 아웃박스
+정산 배치
+DB 성능
+수평 확장
+관측성
 ```
