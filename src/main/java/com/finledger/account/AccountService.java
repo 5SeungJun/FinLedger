@@ -33,9 +33,17 @@ public class AccountService {
         account.withdraw(amount);
     }
 
+    //비관적 락
     @Transactional
     public void withdrawWithLock(Long accountId, long amount){
         Account account = accountRepository.findByIdForUpdate(accountId).orElseThrow(()->new IllegalArgumentException("계좌가 없습니다."));
+
+        account.withdraw(amount);
+    }
+
+    @Transactional
+    public void withdrawOptimistic(Long accountId, long amount){
+        Account account = accountRepository.findById(accountId).orElseThrow(()-> new IllegalArgumentException("계좌가 없습니다."));
 
         account.withdraw(amount);
     }
