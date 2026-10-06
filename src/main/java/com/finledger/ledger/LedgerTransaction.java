@@ -51,4 +51,10 @@ public class LedgerTransaction {
     public LocalDateTime getCreateAt(){
         return createdAt;
     }
+
+    public void validateBalanced(){
+        if(getTotalAmount() != 0L){
+            throw new IllegalStateException("원장의 합계는 0이어야 합니다.");
+        }
+    }
 }
