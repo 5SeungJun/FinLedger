@@ -2,17 +2,23 @@ package com.finledger.transfer;
 
 import com.finledger.account.Account;
 import com.finledger.account.AccountRepository;
+import com.finledger.ledger.LedgerTransaction;
+import com.finledger.ledger.LedgerTransactionRepository;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
 
 @Service
 public class TransferService {
     private final AccountRepository accountRepository;
     private final TransferRepository transferRepository;
+    private final LedgerTransactionRepository ledgerTransactionRepository;
 
-    public TransferService(AccountRepository accountRepository, TransferRepository transferRepository){
+    public TransferService(AccountRepository accountRepository, TransferRepository transferRepository, LedgerTransactionRepository ledgerTransactionRepository){
         this.accountRepository = accountRepository;
         this.transferRepository = transferRepository;
+        this.ledgerTransactionRepository = ledgerTransactionRepository;
     }
 
     @Transactional
@@ -25,20 +31,36 @@ public class TransferService {
                     "같은 계좌로 송금할 수 없습니다."
             );
         }
+        //DeadLock 방지를 위한 일관된 Lock 순서
+        Long firstLockId = Math.min(fromAccountId, toAccountId);
+        Long secondLockId = Math.max(fromAccountId, toAccountId);
 
-        Account from = accountRepository.findById(fromAccountId).orElseThrow(()-> new IllegalArgumentException("출금 계좌가 없습니다."));
-        Account to = accountRepository.findById(toAccountId).orElseThrow(()-> new IllegalArgumentException("입금 계좌가 없습니다."));
+        Account first = accountRepository.findByIdForUpdate(firstLockId).orElseThrow();
+        Account second = accountRepository.findByIdForUpdate(secondLockId).orElseThrow();
 
+        Account from = fromAccountId.equals(first.getId())? first : second;
+        Account to = toAccountId.equals(first.getId())? first : second;
+
+        //송금 생성
         Transfer transfer = new Transfer(from, to, amount);
-
         transferRepository.save(transfer);
 
+        //실제 잔액 변경
         from.withdraw(amount);
-
         to.deposit(amount);
 
-        transfer.success();
+        //원장 생성
+        LedgerTransaction ledger = new LedgerTransaction(transfer, LocalDateTime.now());
 
+        ledger.addEntry(from, -amount);
+        ledger.addEntry(to, amount);
+
+        //복식 원장 불변식 검증
+        ledger.validateBalanced();
+        ledgerTransactionRepository.save(ledger);
+
+        //송금 완료
+        transfer.success();
         return transfer;
     }
 
