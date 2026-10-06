@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 
 public class LedgerTransactionTest {
     @Test
@@ -27,6 +28,26 @@ public class LedgerTransactionTest {
         //then
         assertThat(ledger.getEntries()).hasSize(2);
         assertThat(ledger.getTotalAmount()).isZero();
+
+    }
+
+    @Test
+    @DisplayName("원장 항목의 합계가 0이 아니면 검증시 예외가 발생한다")
+    void unbalancedLedgerTest(){
+        //given
+        Member member = new Member("sj");
+        Account from = new Account(member);
+        Account to = new Account(member);
+
+        LedgerTransaction ledger = new LedgerTransaction(LocalDateTime.now());
+
+        //when
+        ledger.addEntry(from, -30_000L);
+        ledger.addEntry(to, 20_000L);
+
+        //then
+        assertThatThrownBy(ledger::validateBalanced)
+                .isInstanceOf(IllegalStateException.class).hasMessage("원장의 합계는 0이어야 합니다");
 
     }
 }
