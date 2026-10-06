@@ -1,6 +1,7 @@
 package com.finledger.ledger;
 
 import com.finledger.account.Account;
+import com.finledger.transfer.Transfer;
 import jakarta.persistence.*;
 
 import java.time.LocalDateTime;
@@ -18,13 +19,17 @@ public class LedgerTransaction {
     @OneToMany(mappedBy = "ledgerTransaction", cascade = CascadeType.ALL)
     private List<LedgerEntry> entries = new ArrayList<>();
 
+    @OneToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "transfer_id", nullable = false, unique = true)
+    private Transfer transfer;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
-    protected LedgerTransaction(){
-    }
+    protected LedgerTransaction(){}
 
-    public LedgerTransaction(LocalDateTime createdAt){
+    public LedgerTransaction(Transfer transfer, LocalDateTime createdAt){
+        this.transfer = transfer;
         this.createdAt = createdAt;
     }
 
@@ -42,6 +47,10 @@ public class LedgerTransaction {
 
     public Long getId(){
         return id;
+    }
+
+    public Transfer getTransfer(){
+        return transfer;
     }
 
     public List<LedgerEntry> getEntries(){
