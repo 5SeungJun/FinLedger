@@ -44,7 +44,7 @@ public class LedgerTransaction {
         return id;
     }
 
-    public List<LedgerEntry> getEntriess(){
+    public List<LedgerEntry> getEntries(){
         return Collections.unmodifiableList(entries);
     }
 
