@@ -2,6 +2,7 @@ package com.finledger.ledger;
 
 import com.finledger.account.Account;
 import com.finledger.member.Member;
+import com.finledger.transfer.Transfer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +20,7 @@ public class LedgerTransactionTest {
         Account from = new Account(member);
         Account to = new Account(member);
 
-        LedgerTransaction ledger = new LedgerTransaction(LocalDateTime.now());
+        LedgerTransaction ledger = new LedgerTransaction(new Transfer(from, to, 30_000L), LocalDateTime.now());
 
         //when
         ledger.addEntry(from, -30_000L);
@@ -39,7 +40,7 @@ public class LedgerTransactionTest {
         Account from = new Account(member);
         Account to = new Account(member);
 
-        LedgerTransaction ledger = new LedgerTransaction(LocalDateTime.now());
+        LedgerTransaction ledger = new LedgerTransaction(new Transfer(from, to, 30_000L), LocalDateTime.now());
 
         //when
         ledger.addEntry(from, -30_000L);
@@ -47,7 +48,7 @@ public class LedgerTransactionTest {
 
         //then
         assertThatThrownBy(ledger::validateBalanced)
-                .isInstanceOf(IllegalStateException.class).hasMessage("원장의 합계는 0이어야 합니다");
+                .isInstanceOf(IllegalStateException.class).hasMessage("원장의 합계는 0이어야 합니다.");
 
     }
 }
