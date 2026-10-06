@@ -160,6 +160,43 @@ public class TransferTest {
 
         assertThat(ledger.getTotalAmount())
                 .isZero();
+    }
 
+    @Test
+    @DisplayName("원장 처리 중 장애가 발생하면 잔액과 원장 모두 롤백된다.")
+    void ledgerFailureRollback(){
+        //given
+        Member member = memberRepository.save(new Member("sj"));
+        Account from = accountRepository.save(new Account(member));
+        Account to = accountRepository.save(new Account(member));
+
+        from.deposit(100_000L);
+        accountRepository.save(from);
+
+        long ledgerCountBefore = ledgerTransactionRepository.count();
+        long transferCountBefore = transferRepository.count();
+
+        //when
+        assertThatThrownBy(()-> transferService.transferWithLedgerFailure(from.getId(), to.getId(), 30_000L))
+                .isInstanceOf(RuntimeException.class);
+
+        //then
+        Account resultFrom = accountRepository.findById(from.getId())
+                .orElseThrow();
+
+        Account resultTo = accountRepository.findById(to.getId())
+                .orElseThrow();
+
+        assertThat(resultFrom.getBalance())
+                .isEqualTo(100_000L);
+
+        assertThat(resultTo.getBalance())
+                .isZero();
+
+        assertThat(transferRepository.count())
+                .isEqualTo(transferCountBefore);
+
+        assertThat(ledgerTransactionRepository.count())
+                .isEqualTo(ledgerCountBefore);
     }
 }
