@@ -120,4 +120,32 @@ public class TransferService {
         from.withdraw(amount);
         to.deposit(amount);
     }
+
+    @Transactional
+    public void transferWithLedgerFailure(Long fromAccountId, Long toAccountId, long amount){
+        Account from = accountRepository.findById(fromAccountId)
+                .orElseThrow();
+
+        Account to = accountRepository.findById(toAccountId)
+                .orElseThrow();
+
+        Transfer transfer = new Transfer(from, to ,amount);
+
+        transferRepository.save(transfer);
+
+        from.withdraw(amount);
+        to.deposit(amount);
+
+        LedgerTransaction ledger = new LedgerTransaction(transfer, LocalDateTime.now());
+
+        ledger.addEntry(from, -amount);
+        ledger.addEntry(to, amount);
+
+        ledger.validateBalanced();
+
+        ledgerTransactionRepository.save(ledger);
+
+        //장애 주입
+        throw new RuntimeException("원장 기록 이후 강제 장애");
+    }
 }
