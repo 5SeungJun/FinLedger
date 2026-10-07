@@ -45,6 +45,7 @@
 - 교착 상태 재현 및 락 획득 순서 고정
 - 복식 원장 (원장 거래 / 원장 항목)
 - 송금 시 원장 기록
+- 원장 대사 (계좌 잔액과 원장 변동액 비교)
 
 ---
 
@@ -64,6 +65,8 @@
 6. 하나의 원장 거래에서 모든 항목의 합계는 0이어야 한다.
 
 7. 송금과 원장은 함께 기록되거나 함께 취소되어야 한다.
+
+8. 계좌 잔액은 기준 잔액에 원장 변동액을 더한 값과 일치해야 한다.
 ```
 
 ---
@@ -519,6 +522,92 @@ Optional<LedgerTransaction> findByTransferId(Long transferId);
 
 ---
 
+# 6. 원장 대사
+
+## 문제 상황
+
+계좌 잔액(`Account.balance`)과 원장은 **서로 다른 테이블에 따로 저장**된다. 송금 로직에서는 두 값이 함께 바뀌도록 하나의 트랜잭션으로 묶었지만, 이후에도 어긋나지 않는다고 보장할 수는 없다.
+
+- 버그나 수동 작업으로 잔액이 직접 수정되는 경우
+- 원장 기록이 누락되는 경우
+
+어긋난 것을 **스스로 찾아낼 수단**이 없으면, 잔액이 틀려도 아무도 알아채지 못한다.
+
+## 해결 방법
+
+원장의 변동액을 기준으로 잔액을 다시 계산해 실제 잔액과 비교하는 대사(Reconciliation) 로직을 만들었다.
+
+```text
+기대 잔액 = 기준 잔액 + 원장 변동액
+차이     = 실제 잔액 - 기대 잔액
+일치 여부 = (차이 == 0)
+```
+
+- **기준 잔액**: 원장 기록을 시작하기 전의 잔액이다. 입금처럼 원장에 기록되지 않는 변동이 있어서 별도로 전달한다.
+- **원장 변동액**: 해당 계좌의 원장 항목 금액 합계다. 출금은 음수, 입금은 양수라서 합치면 순변동액이 된다.
+
+```java
+@Transactional(readOnly = true)
+public ReconciliationResult reconcile(Long accountId, long baseBalance) {
+    Account account = accountRepository.findById(accountId)...;
+
+    long ledgerDelta = ledgerEntryRepository.sumAmountByAccountId(accountId);
+    long expectedBalance = baseBalance + ledgerDelta;
+    long actualBalance = account.getBalance();
+    long difference = actualBalance - expectedBalance;
+    ...
+}
+```
+
+결과는 `ReconciliationResult`로 돌려준다.
+
+| 필드 | 의미 |
+|---|---|
+| `baseBalance` | 원장 기록 이전 기준 잔액 |
+| `ledgerDelta` | 원장 항목 금액 합계 |
+| `expectedBalance` | 기준 잔액 + 원장 변동액 |
+| `actualBalance` | 현재 `Account.balance` |
+| `difference` | 실제 잔액 - 기대 잔액 |
+| `matched` | 일치 여부 |
+
+### 원장 변동액 조회
+
+```java
+@Query("select coalesce(sum(le.amount), 0) from LedgerEntry le where le.account.id = :accountId")
+long sumAmountByAccountId(@Param("accountId") Long accountId);
+```
+
+`SUM`은 합칠 행이 없으면 `0`이 아니라 `NULL`을 반환한다. 원장 이력이 없는 계좌에서도 기본형 `long`으로 받을 수 있도록 `COALESCE`로 `0`으로 바꿨다.
+
+## 검증
+
+송금 후 잔액을 강제로 틀어 놓고, 대사가 불일치를 찾아내는지 확인했다.
+
+```text
+초기: A 100,000원 입금 (기준 잔액 100,000원)
+송금: A → B 30,000원
+      → A 잔액 70,000원, 원장 변동액 -30,000원
+
+장애 주입: A 잔액을 70,000원 → 60,000원으로 강제 변경
+
+대사 결과
+기대 잔액: 70,000원
+실제 잔액: 60,000원
+차이: -10,000원
+일치 여부: 불일치 ✅
+```
+
+원장 기준으로 70,000원이어야 하는데 실제 잔액이 60,000원이라는 것을 찾아내고, 얼마가 어긋났는지(-10,000원)까지 알 수 있다.
+
+## 학습 내용
+
+- 대사(Reconciliation)
+- 기대 잔액과 실제 잔액 비교
+- 집계 쿼리와 `COALESCE`
+- 장애 주입을 통한 불일치 탐지 검증
+
+---
+
 ## 테스트 범위
 
 ### 계좌
@@ -550,6 +639,10 @@ Optional<LedgerTransaction> findByTransferId(Long transferId);
 
 - 내부 송금의 원장 항목 합계가 0임을 검증
 - 원장 항목 합계가 0이 아니면 검증 시 예외 발생
+
+### 대사
+
+- 계좌 잔액과 원장이 다르면 불일치 탐지 (기대 잔액 / 실제 잔액 / 차이 검증)
 
 ---
 
@@ -585,6 +678,9 @@ Optional<LedgerTransaction> findByTransferId(Long transferId);
 ✅ 원장 합계 불변식 검증
 ✅ 송금 시 원장 기록
 ✅ 원장 기록 이후 장애 시 롤백 검증
+
+✅ 원장 대사 (기대 잔액 vs 실제 잔액)
+✅ 장애 주입으로 불일치 탐지 검증
 
 ▶ 다음
 멱등성
