@@ -46,6 +46,7 @@
 - 복식 원장 (원장 거래 / 원장 항목)
 - 송금 시 원장 기록
 - 원장 대사 (계좌 잔액과 원장 변동액 비교)
+- 송금 취소 (원장 역거래)
 
 ---
 
@@ -67,6 +68,10 @@
 7. 송금과 원장은 함께 기록되거나 함께 취소되어야 한다.
 
 8. 계좌 잔액은 기준 잔액에 원장 변동액을 더한 값과 일치해야 한다.
+
+9. 송금 취소는 원본 원장을 수정하지 않고 반대 부호의 역거래로 기록해야 한다.
+
+10. 같은 송금은 한 번만 취소할 수 있다.
 ```
 
 ---
@@ -413,7 +418,7 @@ B.balance:       0 → 30,000
 
 | 엔티티 | 역할 |
 |---|---|
-| `LedgerTransaction` (원장 거래) | 송금 1건에 대응하는 원장 묶음. `Transfer`와 1:1 (`transfer_id` 유일) |
+| `LedgerTransaction` (원장 거래) | 송금 1건에 대응하는 원장 묶음. `Transfer`와 1:1 (`transfer_id` 유일). 취소 거래는 7장 참고 |
 | `LedgerEntry` (원장 항목) | 계좌 하나의 변동. 출금은 음수, 입금은 양수 |
 
 ```text
@@ -608,6 +613,131 @@ long sumAmountByAccountId(@Param("accountId") Long accountId);
 
 ---
 
+# 7. 역거래 (송금 취소)
+
+## 문제 상황
+
+송금이 한 번 성공하면 되돌릴 방법이 없었다. 취소를 직접 구현한다고 하면 두 가지 방법이 떠오른다.
+
+| 방식 | 문제 |
+|---|---|
+| 원본 원장을 삭제하거나 수정 | 이력이 사라져서 무슨 일이 있었는지 추적할 수 없다 |
+| 잔액만 직접 되돌림 | 원장과 잔액이 어긋나 6장의 대사에서 불일치로 잡힌다 |
+
+## 해결 방법
+
+원본 원장은 그대로 두고, **반대 부호의 새 원장 거래(역거래)를 추가**하는 방식으로 취소를 구현했다.
+
+```text
+원본 거래   A -30,000 / B +30,000   (합계 0)
+역거래      A +30,000 / B -30,000   (합계 0)
+─────────────────────────────────
+두 거래를 합친 순변동: A 0, B 0
+```
+
+### 원장 거래 유형
+
+원장 거래가 두 종류가 되었으므로 `type`으로 구분하고, 역거래는 원본을 `reversalOf`로 가리키게 했다.
+
+| | 일반 송금 원장 | 역거래 원장 |
+|---|---|---|
+| `type` | `TRANSFER` | `REVERSAL` |
+| `transfer` | 송금 | 없음 (`NULL`) |
+| `reversalOf` | 없음 (`NULL`) | 원본 원장 거래 |
+
+역거래는 새 송금이 아니라 기존 거래를 되돌리는 거래라서 자신의 `Transfer`가 없다. 그래서 `transfer`의 `nullable = false`를 제거했다.
+
+### 정적 팩터리 메서드
+
+두 종류의 원장 거래를 만드는 방식이 생겼으므로, 생성자 대신 **의도가 드러나는 이름의 정적 팩터리 메서드**로 만들도록 했다.
+
+```java
+LedgerTransaction.forTransfer(transfer, LocalDateTime.now());     // 송금 원장
+LedgerTransaction.reversalOf(original, LocalDateTime.now());      // 역거래 원장
+```
+
+- 각 메서드가 `type`, `transfer`, `reversalOf`의 올바른 조합을 한 곳에서 세팅한다.
+- 기본 생성자는 `protected`로 두고 옛 public 생성자는 삭제해서, `type`을 빠뜨린 원장 거래를 만드는 코드는 **컴파일 단계에서 불가능**하게 했다.
+
+### 취소 흐름
+
+`ReversalService.reverse(transferId)`가 하나의 트랜잭션에서 처리한다.
+
+```text
+1. 송금과 원본 원장 조회
+2. 이미 취소된 거래인지 확인 (중복 취소 방지)
+3. 두 계좌를 id 순으로 잠금 (4장의 락 순서 고정과 동일)
+4. 잔액 되돌리기
+   - 받은 계좌에서 출금
+   - 보낸 계좌에 입금
+5. 역거래 원장 생성: LedgerTransaction.reversalOf(original, now)
+6. 원본 항목의 부호를 뒤집어 역거래 항목으로 추가
+7. 원장 균형 검증 (합계 0)
+8. 역거래 저장, 송금 상태를 REVERSED로 변경
+```
+
+### 중복 취소 방지
+
+같은 송금을 두 번 취소하면 잔액이 두 번 되돌아가므로 두 겹으로 막았다.
+
+- 코드: `existsByReversalOfId`로 이미 역거래가 있으면 예외
+- DB: `reversal_of_id`에 유일 제약
+
+송금 상태에는 `REVERSED`를 추가했고, `Transfer.reverse()`는 성공한 송금(`SUCCESS`)에서만 동작하도록 했다.
+
+## 검증
+
+**송금 취소**
+
+```text
+초기: A 100,000원 / B 0원
+송금: A → B 30,000원
+취소: 역거래 실행
+
+A 잔액: 100,000원
+B 잔액: 0원
+총 자산: 100,000원
+송금 상태: REVERSED
+```
+
+**중복 취소 방지**
+
+```text
+같은 송금을 두 번 취소 시도
+→ IllegalStateException("이미 취소된 거래입니다.")
+```
+
+## 겪은 문제: 컬럼 추가와 `type` 누락
+
+**1) `NOT NULL` 컬럼 추가 실패**
+
+`type`을 `nullable = false`로 추가하자 테스트에서 다음 오류가 났다.
+
+```text
+alter table ledger_transactions add column type varchar(255) not null ...
+ERROR: column "type" of relation "ledger_transactions" contains null values
+
+→ 이후 insert 시: column "type" of relation "ledger_transactions" does not exist
+```
+
+- `ddl-auto: update`가 기존 행이 있는 테이블에 기본값 없는 `NOT NULL` 컬럼을 추가하려다 실패했다.
+- 이 실패는 경고로만 남고 애플리케이션은 계속 떠서, 컬럼이 없는 상태로 insert 시점에 오류가 났다.
+- 해결하려면 기존 행에 값을 채우거나(백필) 스키마를 새로 만들어야 한다. 운영 환경에서는 마이그레이션 도구로 단계적으로 적용해야 하는 이유이기도 하다.
+
+**2) 옛 생성자가 `type`을 채우지 않음**
+
+컬럼이 생긴 뒤에는 송금에서 `type`이 `null`로 들어가 `NOT NULL` 제약 위반이 났다. 송금 로직이 `type`을 채우지 않는 옛 생성자를 계속 쓰고 있었기 때문이다. 송금 로직을 `forTransfer`로 바꾸고 옛 생성자를 삭제해 해결했다.
+
+## 학습 내용
+
+- 역거래 (원본을 수정하지 않고 반대 부호로 추가)
+- 원장은 덧붙이기만 한다는 원칙
+- 정적 팩터리 메서드
+- 원장 거래 유형과 연관 관계 (`nullable` 변경)
+- `ddl-auto: update`의 한계와 마이그레이션
+
+---
+
 ## 테스트 범위
 
 ### 계좌
@@ -643,6 +773,11 @@ long sumAmountByAccountId(@Param("accountId") Long accountId);
 ### 대사
 
 - 계좌 잔액과 원장이 다르면 불일치 탐지 (기대 잔액 / 실제 잔액 / 차이 검증)
+
+### 송금 취소
+
+- 성공한 송금을 역거래로 취소 (잔액 복구, 송금 상태 `REVERSED`, 총 자산 보존)
+- 같은 송금을 두 번 취소할 수 없음
 
 ---
 
@@ -681,6 +816,10 @@ long sumAmountByAccountId(@Param("accountId") Long accountId);
 
 ✅ 원장 대사 (기대 잔액 vs 실제 잔액)
 ✅ 장애 주입으로 불일치 탐지 검증
+
+✅ 원장 역거래로 송금 취소
+✅ 중복 취소 방지
+✅ 원장 거래 유형 / 정적 팩터리
 
 ▶ 다음
 멱등성
