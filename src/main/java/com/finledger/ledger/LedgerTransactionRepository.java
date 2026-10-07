@@ -9,4 +9,6 @@ public interface LedgerTransactionRepository extends JpaRepository<LedgerTransac
 
     @EntityGraph(attributePaths = "entries")
     Optional<LedgerTransaction> findByTransferId(Long transferId);
+
+    boolean existsByReversalOfId(Long ledgerTransactionId);
 }

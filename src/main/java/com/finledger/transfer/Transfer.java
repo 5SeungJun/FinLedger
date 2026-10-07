@@ -37,6 +37,13 @@ public class Transfer {
         this.status = TransferStatus.PENDING;
     }
 
+    public void reverse(){
+        if(status != TransferStatus.SUCCESS){
+            throw new IllegalStateException("성공한 송금만 취소할 수 있습니다.");
+        }
+        status = TransferStatus.REVERSED;
+    }
+
     public void success(){
         this.status = TransferStatus.SUCCESS;
     }
