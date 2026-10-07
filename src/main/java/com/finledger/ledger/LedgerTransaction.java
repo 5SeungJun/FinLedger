@@ -19,19 +19,22 @@ public class LedgerTransaction {
     @OneToMany(mappedBy = "ledgerTransaction", cascade = CascadeType.ALL)
     private List<LedgerEntry> entries = new ArrayList<>();
 
-    @OneToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "transfer_id", nullable = false, unique = true)
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "transfer_id", unique = true)
     private Transfer transfer;
+
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reversal_of_id", unique = true)
+    private LedgerTransaction reversalOf;
 
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
-    protected LedgerTransaction(){}
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private LedgerTransactionType type;
 
-    public LedgerTransaction(Transfer transfer, LocalDateTime createdAt){
-        this.transfer = transfer;
-        this.createdAt = createdAt;
-    }
+    protected LedgerTransaction(){}
 
     public void addEntry(Account account,long amount){
         LedgerEntry entry = new LedgerEntry(this, account, amount);
@@ -65,5 +68,25 @@ public class LedgerTransaction {
         if(getTotalAmount() != 0L){
             throw new IllegalStateException("원장의 합계는 0이어야 합니다.");
         }
+    }
+
+    public static LedgerTransaction forTransfer(Transfer transfer, LocalDateTime createdAt){
+        LedgerTransaction ledger = new LedgerTransaction();
+
+        ledger.transfer = transfer;
+        ledger.type = LedgerTransactionType.TRANSFER;
+        ledger.createdAt = createdAt;
+
+        return ledger;
+    }
+
+    public static LedgerTransaction reversalOf(LedgerTransaction original, LocalDateTime createdAt){
+        LedgerTransaction ledger = new LedgerTransaction();
+
+        ledger.reversalOf = original;
+        ledger.type = LedgerTransactionType.REVERSAL;
+        ledger.createdAt = createdAt;
+
+        return ledger;
     }
 }

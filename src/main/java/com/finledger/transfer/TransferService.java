@@ -50,7 +50,7 @@ public class TransferService {
         to.deposit(amount);
 
         //원장 생성
-        LedgerTransaction ledger = new LedgerTransaction(transfer, LocalDateTime.now());
+        LedgerTransaction ledger = LedgerTransaction.forTransfer(transfer, LocalDateTime.now());
 
         ledger.addEntry(from, -amount);
         ledger.addEntry(to, amount);
@@ -136,7 +136,7 @@ public class TransferService {
         from.withdraw(amount);
         to.deposit(amount);
 
-        LedgerTransaction ledger = new LedgerTransaction(transfer, LocalDateTime.now());
+        LedgerTransaction ledger = LedgerTransaction.forTransfer(transfer, LocalDateTime.now());
 
         ledger.addEntry(from, -amount);
         ledger.addEntry(to, amount);

@@ -20,7 +20,7 @@ public class LedgerTransactionTest {
         Account from = new Account(member);
         Account to = new Account(member);
 
-        LedgerTransaction ledger = new LedgerTransaction(new Transfer(from, to, 30_000L), LocalDateTime.now());
+        LedgerTransaction ledger = LedgerTransaction.forTransfer(new Transfer(from, to, 30_000L), LocalDateTime.now());
 
         //when
         ledger.addEntry(from, -30_000L);
@@ -40,7 +40,7 @@ public class LedgerTransactionTest {
         Account from = new Account(member);
         Account to = new Account(member);
 
-        LedgerTransaction ledger = new LedgerTransaction(new Transfer(from, to, 30_000L), LocalDateTime.now());
+        LedgerTransaction ledger = LedgerTransaction.forTransfer(new Transfer(from, to, 30_000L), LocalDateTime.now());
 
         //when
         ledger.addEntry(from, -30_000L);
