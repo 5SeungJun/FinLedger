@@ -15,7 +15,7 @@ public class IdempotencyRecord {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "idempotency_key", nullable = false, updatable = false)
+    @Column(name = "idempotency_key", nullable = false, updatable = false, length = 128)
     private String idempotencyKey;
 
     @Column(nullable = false, updatable = false)

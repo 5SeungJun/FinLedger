@@ -17,6 +17,17 @@ public class IdempotentTransferService {
     }
 
     public Transfer transfer(String key, Long fromAccountId, Long toAccountId, long amount){
+        if(key == null || key.isBlank() || key.length() > 128){
+            throw new IllegalArgumentException("멱등성 키는 1~128자여야 합니다.");
+        }
+        if(fromAccountId == null || toAccountId == null){
+            throw new IllegalArgumentException("계좌 ID는 필수입니다.");
+        }
+        if(amount <= 0){
+            throw new IllegalArgumentException("송금 금액은 1원 이상이어야 합니다.");
+        }
+
+
         //이미 완료된 요청인지 확인
         Optional<IdempotencyRecord> existing = idempotencyRecordRepository.findByKey(key);
 
