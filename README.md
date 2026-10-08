@@ -47,6 +47,7 @@
 - 송금 시 원장 기록
 - 원장 대사 (계좌 잔액과 원장 변동액 비교)
 - 송금 취소 (원장 역거래)
+- 멱등성 키 기반 송금 처리 (중복 요청 방지)
 
 ---
 
@@ -72,6 +73,10 @@
 9. 송금 취소는 원본 원장을 수정하지 않고 반대 부호의 역거래로 기록해야 한다.
 
 10. 같은 송금은 한 번만 취소할 수 있다.
+
+11. 같은 멱등성 키의 요청은 동시에 들어와도 송금이 한 번만 일어나야 한다.
+
+12. 같은 멱등성 키를 다른 내용의 요청에 재사용할 수 없다.
 ```
 
 ---
@@ -738,6 +743,155 @@ ERROR: column "type" of relation "ledger_transactions" contains null values
 
 ---
 
+# 8. 멱등성
+
+## 문제 상황
+
+송금 요청이 실패한 것처럼 보여서 클라이언트가 **같은 요청을 다시 보내는** 경우가 있다.
+
+- 서버는 처리했는데 응답이 중간에 끊겨 클라이언트가 실패로 오해하고 재시도
+- 사용자가 버튼을 두 번 누름
+
+요청마다 새 송금으로 처리하면 같은 요청이 두 번 반영되어 **이중 송금**이 된다.
+
+## 해결 방법
+
+클라이언트가 요청마다 고유한 **멱등성 키**를 보내고, 서버는 키와 처리 결과를 `IdempotencyRecord`에 기록한다. 같은 키가 다시 오면 새로 처리하지 않고 **처음 처리한 결과를 그대로 돌려준다.**
+
+| 필드 | 의미 |
+|---|---|
+| `idempotencyKey` | 요청 식별 키 (유일) |
+| `fromAccountId`, `toAccountId`, `amount` | 처음 요청의 내용 |
+| `transfer` | 처리 결과 (완료 후 연결) |
+
+### UNIQUE 제약
+
+키 컬럼에 `UNIQUE(idempotency_key)`를 걸었다. 코드에서 "이 키가 있는지 조회한 뒤 없으면 처리"하는 것만으로는 동시 요청을 막을 수 없기 때문이다.
+
+```text
+시간 ↓   요청 ①                         요청 ②
+
+  1      키 조회 → 없음
+  2                                      키 조회 → 없음
+  3      송금 처리, 키 저장
+  4                                      송금 처리, 키 저장   ← 이중 송금
+```
+
+조회와 저장 사이에 다른 요청이 끼어드는 문제(2장의 갱신 손실과 같은 구조)이고, 처음 들어온 키는 아직 행이 없어 `FOR UPDATE`로 잠글 대상도 없다. `UNIQUE` 제약을 두면 같은 키의 저장을 DB가 마지막에 막아 준다.
+
+```text
+  3      키 저장 성공 ✅
+  4                                      키 저장 시도 → UNIQUE 위반 ❌
+```
+
+### 트랜잭션 분리
+
+`UNIQUE` 위반이 난 트랜잭션은 이미 롤백 대상이라, 같은 트랜잭션 안에서 예외를 잡아 기존 결과를 조회할 수 없다. PostgreSQL은 오류가 난 트랜잭션이 끝나기 전까지 다른 쿼리를 받지 않고, Spring도 해당 트랜잭션을 롤백 전용으로 표시하기 때문이다.
+
+그래서 **트랜잭션을 수행하는 Bean과 예외를 처리하는 Bean을 분리**했다.
+
+```text
+[IdempotentTransferService]   ← @Transactional 없음, 예외를 잡을 깨끗한 곳
+    │
+    ├─ try:    [IdempotentTransferProcessor]   ← 트랜잭션
+    │             키 저장(flush) → 송금 → 키에 결과 연결
+    │
+    └─ catch (UNIQUE 위반):
+                 트랜잭션 밖에서 키를 다시 조회 → 기존 결과 반환
+```
+
+```java
+// IdempotentTransferService (트랜잭션 없음)
+try {
+    return processor.process(key, fromAccountId, toAccountId, amount);
+} catch (DataIntegrityViolationException e) {
+    // 실패한 트랜잭션 밖에서 기록을 다시 조회
+    IdempotencyRecord record = idempotencyRecordRepository.findByKey(key).orElseThrow(() -> e);
+    return resolveExisting(record, fromAccountId, toAccountId, amount);
+}
+```
+
+```java
+// IdempotentTransferProcessor
+@Transactional
+public Transfer process(String key, Long fromAccountId, Long toAccountId, long amount) {
+    IdempotencyRecord record = new IdempotencyRecord(key, fromAccountId, toAccountId, amount);
+    idempotencyRecordRepository.saveAndFlush(record);   // UNIQUE를 즉시 확인
+
+    Transfer transfer = transferService.transfer(fromAccountId, toAccountId, amount);
+    record.complete(transfer);
+    return transfer;
+}
+```
+
+`@Transactional`은 프록시로 동작하므로 같은 클래스 안의 호출로는 트랜잭션이 만들어지지 않는다. 그래서 반드시 다른 Bean을 호출해야 한다(3장의 재시도와 같은 이유).
+
+### 같은 키, 다른 요청
+
+기존 결과를 돌려주기 전에 **요청 내용이 처음과 같은지** 비교한다. 같은 키로 금액이나 계좌가 다른 요청이 오면 이전 결과를 돌려주지 않고 `IdempotencyKeyConflictException`으로 거부한다.
+
+```text
+키 "abc": A → B 30,000원 (처리됨)
+키 "abc": A → B 30,000원 → 이전 결과 반환
+키 "abc": A → B 50,000원 → IdempotencyKeyConflictException
+```
+
+## 검증
+
+**같은 키의 순차 요청**
+
+```text
+초기: A 100,000원 / B 0원
+같은 키로 A → B 30,000원 요청 2번
+
+두 요청이 같은 송금(Transfer) 반환
+A 잔액: 70,000원
+B 잔액: 30,000원
+송금 건수 +1, 원장 건수 +1
+```
+
+**같은 키, 다른 요청**
+
+```text
+같은 키로 30,000원 요청 후 50,000원 요청
+→ IdempotencyKeyConflictException
+```
+
+**같은 키의 동시 요청**
+
+```text
+같은 키로 A → B 30,000원 요청 2개를 동시에 실행
+
+두 요청이 같은 송금(Transfer) 반환
+A 잔액: 70,000원
+B 잔액: 30,000원
+```
+
+## 겪은 문제
+
+**1) 락 조회 메서드를 트랜잭션 없이 호출**
+
+검증 단계에서 `findByIdForUpdate`를 그대로 호출했더니 `TransactionRequiredException: No active transaction`이 발생했다. `FOR UPDATE`는 트랜잭션 안에서만 의미가 있어 트랜잭션이 없으면 JPA가 거부한다. 값을 읽기만 하는 검증이라 락이 필요 없어서 `findById`로 바꿔 해결했다.
+
+**2) 고정 키가 이전 실행의 기록과 충돌**
+
+테스트의 멱등성 키를 고정 문자열로 썼더니, 두 번째 실행부터 `IdempotencyKeyConflictException`이 발생했다.
+
+- 이전 실행이 남긴 기록(다른 계좌 id)이 DB에 그대로 있었다.
+- 같은 키로 다른 계좌 요청이 왔으므로 서비스가 의도대로 충돌로 거부한 것이다.
+
+테스트마다 `UUID`를 붙여 고유한 키를 쓰도록 바꿔 해결했다. 실제 클라이언트도 요청마다 고유한 키를 보낸다.
+
+## 학습 내용
+
+- 멱등성과 멱등성 키
+- `UNIQUE` 제약으로 동시 요청 중복 방지
+- 트랜잭션 분리 (UNIQUE 위반 후 롤백 전용 트랜잭션)
+- 같은 키의 다른 요청 거부
+- 프록시 기반 `@Transactional`과 Bean 분리
+
+---
+
 ## 테스트 범위
 
 ### 계좌
@@ -778,6 +932,12 @@ ERROR: column "type" of relation "ledger_transactions" contains null values
 
 - 성공한 송금을 역거래로 취소 (잔액 복구, 송금 상태 `REVERSED`, 총 자산 보존)
 - 같은 송금을 두 번 취소할 수 없음
+
+### 멱등성
+
+- 같은 멱등성 키의 동일 요청은 한 번만 송금
+- 같은 멱등성 키를 다른 요청에 재사용할 수 없음
+- 같은 멱등성 키의 동시 요청도 한 번만 송금
 
 ---
 
@@ -821,11 +981,15 @@ ERROR: column "type" of relation "ledger_transactions" contains null values
 ✅ 중복 취소 방지
 ✅ 원장 거래 유형 / 정적 팩터리
 
+✅ 멱등성 키 기반 송금 처리
+✅ UNIQUE 제약으로 중복 요청 방지
+✅ 트랜잭션 분리로 UNIQUE 충돌 처리
+✅ 같은 키의 다른 요청 거부
+
 ▶ 다음
-멱등성
+외부 시스템 장애
 
 이후
-외부 시스템 장애
 커넥션 풀
 Kafka
 트랜잭셔널 아웃박스
