@@ -39,6 +39,8 @@ public class FinancialFlowIntegrationTest {
     ReconciliationService reconciliationService;
     @Autowired
     ReversalService reversalService;
+    @Autowired
+    TransferService transferService;
 
     @Test
     @DisplayName("송금부터 역거래까지 금융 정합성을 유지한다")
@@ -115,5 +117,41 @@ public class FinancialFlowIntegrationTest {
         assertThatThrownBy(() -> reversalService.reverse(first.getId())).isInstanceOf(IllegalStateException.class);
     }
 
+    @Test
+    @DisplayName("수취 계좌의 잔액이 부족하면 역거래가 롤백된다")
+    void reversalFailsWhenInsufficientBalance(){
+        Member member = memberRepository.save(new Member("sj"));
 
+        Account a = accountRepository.save(new Account(member));
+        Account b = accountRepository.save(new Account(member));
+        Account c = accountRepository.save(new Account(member));
+
+        a.deposit(100_000L);
+        accountRepository.save(a);
+
+        Transfer originalTransfer = transferService.transfer(a.getId(), b.getId(), 30_000L);
+
+        transferService.transfer(b.getId(), c.getId(), 25_000L);
+
+        LedgerTransaction originalLedger = ledgerTransactionRepository.findByTransferId(originalTransfer.getId()).orElseThrow();
+
+        long ledgerCountBefore = ledgerTransactionRepository.count();
+
+        //B는 5000원만 남아서 역거래 불가능
+        assertThatThrownBy(()->reversalService.reverse(originalTransfer.getId()))
+                .isInstanceOf(RuntimeException.class);
+
+        Account resultA = accountRepository.findById(a.getId()).orElseThrow();
+        Account resultB = accountRepository.findById(b.getId()).orElseThrow();
+        Account resultC = accountRepository.findById(c.getId()).orElseThrow();
+
+        assertThat(resultA.getBalance()).isEqualTo(70_000L);
+        assertThat(resultB.getBalance()).isEqualTo(5_000L);
+        assertThat(resultC.getBalance()).isEqualTo(25_000L);
+
+        //실패한 역거래 원장은 생성되지 않아야 함
+        assertThat(ledgerTransactionRepository.findByReversalOfId(originalLedger.getId())).isEmpty();
+        assertThat(ledgerTransactionRepository.count()).isEqualTo(ledgerCountBefore);
+        assertThat(transferRepository.findById(originalTransfer.getId()).orElseThrow().getStatus()).isEqualTo(TransferStatus.SUCCESS);
+    }
 }
