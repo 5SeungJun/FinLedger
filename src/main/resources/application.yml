@@ -15,3 +15,6 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+
+external-bank:
+  base-url: ${EXTERNAL_BANK_URL:http://localhost:8081}
