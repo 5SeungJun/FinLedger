@@ -1,5 +1,6 @@
 package com.finledger.externalbank;
 
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -31,6 +32,10 @@ public class ExternalBankRecoveryService {
 
             //예상하지 못한 응답도 상태 조회로 확인
             return verifyStatus(request);
+        } catch (CallNotPermittedException e){
+
+            //서킷이 열려 POST를 보내지 않았으므로 외부에서 처리됐을 가능성이 없음
+            return BankOutcome.DEFERRED;
         } catch (HttpServerErrorException | ResourceAccessException e){
 
             //500 / Timeout: 실제 송금 성공 여부가 불명확
