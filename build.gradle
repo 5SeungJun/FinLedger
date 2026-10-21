@@ -38,5 +38,15 @@ dependencies {
 }
 
 tasks.named('test') {
-    useJUnitPlatform()
+    useJUnitPlatform{
+        excludeTags 'live'
+    }
+}
+
+task.register('liveTest', Test){
+    useJUnitPlatform{
+        includeTags 'live'
+    }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
 }
