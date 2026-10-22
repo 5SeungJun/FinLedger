@@ -179,7 +179,6 @@ cd external-bank-simulator
 .\gradlew.bat clean test
 ```
 
-> 위 명령은 저장소에 해당 프로젝트와 Gradle Wrapper가 포함되어 있을 때 사용하는 테스트 재현 명령입니다. README의 외부 시스템 장애 시나리오는 실행·검증을 완료한 결과로 기록했습니다.
 
 ## 현재 한계와 다음 단계
 
@@ -189,4 +188,3 @@ cd external-bank-simulator
 - **트랜잭션 경계 적용:** 커넥션 풀 실험은 테스트 전용 서비스로 검증했습니다. FinLedger가 외부 은행을 실제로 호출하는 송금 경로에 이 경계를 적용하는 것은 다음 단계입니다.
 - **확장 로드맵:** 외부 송금 연동(결과 미확정 상태·상태 조회 확정) → Resilience4j(타임아웃·재시도·서킷 브레이커) → Kafka 중복 이벤트 → Transactional Outbox → Spring Batch 대용량 정산·재시작 → DB 인덱스·조회 최적화 → Redis·다중 인스턴스 → Micrometer/Prometheus/Grafana·k6 부하 테스트. Testcontainers·GitHub Actions는 테스트·배포 자동화 단계에서 검토합니다.
 
-> 이 README는 **구현 과정의 핵심 장애·검증·기술 선택**을 요약한 포트폴리오용 문서입니다. 성능 개선율·처리량처럼 실측하지 않은 수치는 기재하지 않았습니다.
